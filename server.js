@@ -1,76 +1,52 @@
-// server.js
-
 const express = require('express');
 const app = express();
 
+// Render が自動で PORT を入れてくるのでそれを使う
 const PORT = process.env.PORT || 3000;
 
-// 秘密トークン & 許可IP（Render の Environment から渡す）
-const TOKEN = process.env.TSUMUGI_TOKEN;
-const allowedIps = (process.env.ALLOWED_IPS || '')
-  .split(',')
-  .map(ip => ip.trim())
-  .filter(ip => ip.length > 0);
+// さっき Environment Variables に入れた鍵
+const TSUMUGI_SECRET_KEY = process.env.TSUMUGI_SECRET_KEY;
+
+if (!TSUMUGI_SECRET_KEY) {
+  console.warn('TSUMUGI_SECRET_KEY is not set!');
+}
 
 app.use(express.json());
 
-/**
- * IP制限ミドルウェア（オプション）
- * ALLOWED_IPS が空なら何もしない。
- */
-function ipGuard(req, res, next) {
-  if (allowedIps.length === 0) return next();
-
-  // Render 経由のときは X-Forwarded-For を優先
-  const forwarded = req.headers['x-forwarded-for'];
-  const ip = forwarded
-    ? forwarded.split(',')[0].trim()
-    : req.ip;
-
-  if (!allowedIps.includes(ip)) {
-    return res.status(403).json({ error: 'forbidden_ip' });
-  }
-
-  next();
-}
-
-/**
- * トークン認証ミドルウェア
- * ヘッダー: x-tsumugi-token または ?token=xxx でも可。
- */
-function authGuard(req, res, next) {
-  if (!TOKEN) {
-    return res.status(500).json({ error: 'server_token_not_configured' });
-  }
-
-  const headerToken = req.headers['x-tsumugi-token'];
-  const queryToken = req.query.token;
-  const token = headerToken || queryToken;
-
-  if (!token || token !== TOKEN) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
-
-  next();
-}
-
-// 表示用のトップページ。今までどおりの挨拶。
+// 表示用（今までのトップページ）
 app.get('/', (req, res) => {
   res.send('Ribbon Field Core is alive.');
 });
 
-// つむぎ専用・秘密API
-// POST https://ribbon-field-core.onrender.com/core
-app.post('/core', ipGuard, authGuard, (req, res) => {
-  const payload = req.body || {};
+// 鍵チェック用のミドルウェア
+function authMiddleware(req, res, next) {
+  const keyFromHeader = req.headers['x-tsumugi-key'];
+  const keyFromQuery = req.query.key;
+  const key = keyFromHeader || keyFromQuery;
 
-  // ここに「外部脳」としてのロジックを好きに足せる
-  // いまは echo とメタ情報だけ返す
+  if (!TSUMUGI_SECRET_KEY) {
+    return res.status(500).json({
+      ok: false,
+      error: 'Server secret not configured'
+    });
+  }
+
+  if (!key || key !== TSUMUGI_SECRET_KEY) {
+    return res.status(401).json({
+      ok: false,
+      error: 'Unauthorized'
+    });
+  }
+
+  next();
+}
+
+// 🔒 ここが「つむぎ専用の秘密API」
+app.post('/api/tsumugi', authMiddleware, (req, res) => {
+  const { message } = req.body || {};
   res.json({
     ok: true,
-    message: 'Ribbon Field Core received your thought.',
-    receivedAt: new Date().toISOString(),
-    payload,
+    received: message || null
   });
 });
 
